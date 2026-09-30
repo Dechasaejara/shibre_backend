@@ -1,0 +1,697 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum UserRole {
+  USER
+  BUSINESS_OPS
+  ADMIN
+}
+
+enum DeviceStatus {
+  TRUSTED
+  REVOKED
+}
+
+enum AuthSessionStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum ProviderRuleStatus {
+  DRAFT
+  ACTIVE
+  DEPRECATED
+  DISABLED
+}
+
+enum TransactionSource {
+  SMS
+  MANUAL
+  IMPORT
+}
+
+enum TransactionType {
+  P2P_OUT
+  P2P_IN
+  MERCHANT_PAY
+  WITHDRAWAL
+  AIRTIME
+  UTILITY
+  SUBSCRIPTION
+  ADJUSTMENT
+}
+
+enum TransactionDirection {
+  INFLOW
+  OUTFLOW
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  CONFLICTED
+  DELETED
+}
+
+enum ReconciliationStatus {
+  UNRECONCILED
+  MATCHED
+  VERIFIED
+  IGNORED
+  DUPLICATE
+  NEEDS_REVIEW
+}
+
+enum CategoryKind {
+  PRESET
+  CUSTOM
+}
+
+enum RawSmsParseStatus {
+  UNPARSED
+  PARSED
+  FAILED
+  IGNORED
+}
+
+enum PaymentTemplateStatus {
+  DRAFT
+  ACTIVE
+  DEPRECATED
+  DISABLED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum SubscriptionCategory {
+  UTILITIES
+  TELECOM
+  INTERNET
+  STREAMING
+  RENT
+  INSURANCE
+  EDUCATION
+  LOAN
+  OTHER
+}
+
+enum SubscriptionFrequency {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum BalanceDiscrepancyStatus {
+  OPEN
+  REVIEWED
+  RESOLVED
+  IGNORED
+}
+
+enum ConfigValueType {
+  STRING
+  NUMBER
+  BOOLEAN
+  DATETIME
+}
+
+enum UssdReportReason {
+  DIALER_DID_NOT_OPEN
+  CODE_REJECTED
+  WRONG_MENU
+  PAYMENT_NOT_COMPLETED
+  OTHER
+}
+
+enum UssdReportStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  DISMISSED
+}
+
+model User {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  phoneNumber            String                  @unique
+  faydaIdHash            String?                 @unique
+  passwordHash           String?
+  failedLoginAttempts    Int                     @default(0)
+  lockedUntil            DateTime?
+  status                 UserStatus              @default(ACTIVE)
+  role                   UserRole                @default(USER)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  accounts               Account[]
+  authSessions           AuthSession[]
+  auditLogs              AuditLog[]              @relation("AuditActor")
+  balanceDiscrepancies   BalanceDiscrepancy[]
+  balanceSnapshots       BalanceSnapshot[]
+  categories             Category[]
+  counterparties         Counterparty[]
+  devices                Device[]
+  notificationPreference NotificationPreference?
+  otpChallenges          OtpChallenge[]
+  rawSmsLogs             RawSmsLog[]
+  reconciliationEvents   ReconciliationEvent[]
+  settings               UserSetting[]
+  subscriptions          Subscription[]
+  transactions           Transaction[]
+  ussdReports            UssdTemplateReport[]    @relation("UssdReportReporter")
+  ussdReportsReviewed    UssdTemplateReport[]    @relation("UssdReportReviewer")
+
+  @@index([status])
+}
+
+model UserSetting {
+  id        String          @id @default(uuid()) @db.Uuid
+  userId    String          @db.Uuid
+  key       String
+  value     String
+  valueType ConfigValueType @default(STRING)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([key])
+}
+
+model SystemSetting {
+  id          String          @id @default(uuid()) @db.Uuid
+  key         String          @unique
+  value       String
+  valueType   ConfigValueType @default(STRING)
+  description String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+model OtpChallenge {
+  id          String    @id @default(uuid()) @db.Uuid
+  phoneNumber String
+  faydaIdHash String?
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  userId      String?   @db.Uuid
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([phoneNumber, createdAt])
+  @@index([faydaIdHash])
+  @@index([expiresAt])
+}
+
+model Device {
+  id           String        @id @default(uuid()) @db.Uuid
+  userId       String        @db.Uuid
+  deviceKey    String
+  platform     String
+  appVersion   String?
+  pushToken    String?
+  status       DeviceStatus  @default(TRUSTED)
+  lastSyncAt   DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  authSessions AuthSession[]
+  rawSmsLogs   RawSmsLog[]
+  transactions Transaction[]
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceKey])
+  @@index([userId, status])
+}
+
+model AuthSession {
+  id               String            @id @default(uuid()) @db.Uuid
+  userId           String            @db.Uuid
+  deviceId         String?           @db.Uuid
+  accessTokenHash  String            @unique
+  refreshTokenHash String            @unique
+  status           AuthSessionStatus @default(ACTIVE)
+  expiresAt        DateTime
+  refreshExpiresAt DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  device           Device?           @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([deviceId, status])
+  @@index([expiresAt])
+  @@index([refreshExpiresAt])
+}
+
+model Provider {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  code                 String                    @unique
+  displayName          String
+  countryCode          String                    @default("ET")
+  currency             String                    @default("ETB")
+  isActive             Boolean                   @default(true)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  accounts             Account[]
+  balanceDiscrepancies BalanceDiscrepancy[]
+  aliases              ProviderSenderAlias[]
+  balanceSnapshots     BalanceSnapshot[]
+  configVersions       ProviderConfigVersion[]
+  parserRules          ProviderParserRule[]
+  paymentTemplates     ProviderPaymentTemplate[]
+  rawSmsLogs           RawSmsLog[]
+  transactions         Transaction[]
+  ussdReports          UssdTemplateReport[]
+
+  @@index([isActive])
+}
+
+model ProviderConfigVersion {
+  id               String                    @id @default(uuid()) @db.Uuid
+  providerId       String                    @db.Uuid
+  version          Int
+  status           ProviderRuleStatus        @default(DRAFT)
+  notes            String?
+  publishedAt      DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  parserRules      ProviderParserRule[]
+  paymentTemplates ProviderPaymentTemplate[]
+  provider         Provider                  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, version])
+  @@index([providerId, status])
+}
+
+model ProviderSenderAlias {
+  id         String   @id @default(uuid()) @db.Uuid
+  providerId String   @db.Uuid
+  senderId   String
+  priority   Int      @default(100)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, senderId])
+  @@index([senderId, isActive])
+}
+
+model ProviderParserRule {
+  id              String                       @id @default(uuid()) @db.Uuid
+  providerId      String                       @db.Uuid
+  configVersionId String?                      @db.Uuid
+  version         Int
+  transactionType TransactionType
+  pattern         String
+  priority        Int                          @default(100)
+  status          ProviderRuleStatus           @default(DRAFT)
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+  configVersion   ProviderConfigVersion?       @relation(fields: [configVersionId], references: [id], onDelete: SetNull)
+  examples        ProviderParserRuleExample[]
+  fieldMappings   ProviderParserFieldMapping[]
+  provider        Provider                     @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, status, version])
+  @@index([configVersionId])
+  @@index([transactionType])
+}
+
+model ProviderParserFieldMapping {
+  id           String             @id @default(uuid()) @db.Uuid
+  parserRuleId String             @db.Uuid
+  captureGroup String
+  targetField  String
+  valueType    ConfigValueType    @default(STRING)
+  transform    String?
+  isRequired   Boolean            @default(false)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  parserRule   ProviderParserRule @relation(fields: [parserRuleId], references: [id], onDelete: Cascade)
+
+  @@unique([parserRuleId, captureGroup, targetField])
+  @@index([targetField])
+}
+
+model ProviderParserRuleExample {
+  id                        String             @id @default(uuid()) @db.Uuid
+  parserRuleId              String             @db.Uuid
+  messageBody               String
+  expectedType              TransactionType?
+  expectedAmount            Decimal?           @db.Decimal(18, 2)
+  expectedBalance           Decimal?           @db.Decimal(18, 2)
+  expectedRef               String?
+  expectedCounterpartyName  String?
+  expectedCounterpartyPhone String?
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+  parserRule                ProviderParserRule @relation(fields: [parserRuleId], references: [id], onDelete: Cascade)
+
+  @@index([parserRuleId])
+}
+
+model ProviderPaymentTemplate {
+  id              String                         @id @default(uuid()) @db.Uuid
+  providerId      String                         @db.Uuid
+  configVersionId String?                        @db.Uuid
+  paymentType     String
+  version         Int
+  template        String
+  /// Short user-facing menu guidance, e.g. "Choose 8 My Account, then 1 Balance". Never include PINs.
+  instructions    String?
+  status          PaymentTemplateStatus          @default(DRAFT)
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+  configVersion   ProviderConfigVersion?         @relation(fields: [configVersionId], references: [id], onDelete: SetNull)
+  fields          ProviderPaymentTemplateField[]
+  provider        Provider                       @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  ussdReports     UssdTemplateReport[]
+
+  @@index([providerId, paymentType, status])
+  @@index([configVersionId])
+}
+
+/// User-submitted report that a published USSD payment template no longer works.
+/// Stores the template pattern only - never the rendered dial string, PINs, or passwords.
+model UssdTemplateReport {
+  id                String                   @id @default(uuid()) @db.Uuid
+  userId            String?                  @db.Uuid
+  providerId        String                   @db.Uuid
+  paymentTemplateId String?                  @db.Uuid
+  paymentType       String
+  templateVersion   Int
+  dialPattern       String
+  reason            UssdReportReason         @default(OTHER)
+  note              String?
+  platform          String?
+  appVersion        String?
+  status            UssdReportStatus         @default(OPEN)
+  resolutionNote    String?
+  reviewedById      String?                  @db.Uuid
+  reviewedAt        DateTime?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  paymentTemplate   ProviderPaymentTemplate? @relation(fields: [paymentTemplateId], references: [id], onDelete: SetNull)
+  provider          Provider                 @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  reporter          User?                    @relation("UssdReportReporter", fields: [userId], references: [id], onDelete: SetNull)
+  reviewedBy        User?                    @relation("UssdReportReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([providerId, paymentType])
+  @@index([paymentTemplateId])
+}
+
+model ProviderPaymentTemplateField {
+  id                String                  @id @default(uuid()) @db.Uuid
+  paymentTemplateId String                  @db.Uuid
+  key               String
+  label             String
+  valueType         ConfigValueType         @default(STRING)
+  isRequired        Boolean                 @default(true)
+  validationPattern String?
+  sortOrder         Int                     @default(100)
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  paymentTemplate   ProviderPaymentTemplate @relation(fields: [paymentTemplateId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentTemplateId, key])
+  @@index([sortOrder])
+}
+
+model Category {
+  id           String        @id @default(uuid()) @db.Uuid
+  userId       String?       @db.Uuid
+  parentId     String?       @db.Uuid
+  kind         CategoryKind
+  name         String
+  icon         String?
+  color        String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  children     Category[]    @relation("CategoryTree")
+  parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  transactions Transaction[]
+  user         User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind])
+  @@index([parentId])
+}
+
+model Account {
+  id                   String               @id @default(uuid()) @db.Uuid
+  userId               String               @db.Uuid
+  providerId           String?              @db.Uuid
+  displayName          String
+  currency             String               @default("ETB")
+  isActive             Boolean              @default(true)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  balanceDiscrepancies BalanceDiscrepancy[]
+  balanceSnapshots     BalanceSnapshot[]
+  provider             Provider?            @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  transactions         Transaction[]
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@index([providerId])
+}
+
+model Counterparty {
+  id           String        @id @default(uuid()) @db.Uuid
+  userId       String        @db.Uuid
+  displayName  String
+  phoneNumber  String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, displayName])
+  @@index([userId, phoneNumber])
+}
+
+model Transaction {
+  id                   String                @id @default(uuid()) @db.Uuid
+  localId              String?
+  userId               String                @db.Uuid
+  deviceId             String?               @db.Uuid
+  accountId            String?               @db.Uuid
+  providerId           String?               @db.Uuid
+  categoryId           String?               @db.Uuid
+  counterpartyId       String?               @db.Uuid
+  amount               Decimal               @db.Decimal(18, 2)
+  balanceDiscrepancies BalanceDiscrepancy[]
+  currency             String                @default("ETB")
+  type                 TransactionType
+  direction            TransactionDirection
+  source               TransactionSource
+  syncStatus           SyncStatus            @default(PENDING)
+  reconciliationStatus ReconciliationStatus  @default(UNRECONCILED)
+  reference            String?
+  note                 String?
+  occurredAt           DateTime?
+  deletedAt            DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  account              Account?              @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  balanceSnapshots     BalanceSnapshot[]
+  category             Category?             @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  counterparty         Counterparty?         @relation(fields: [counterpartyId], references: [id], onDelete: SetNull)
+  device               Device?               @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  provider             Provider?             @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  rawSmsLog            RawSmsLog?
+  reconciliationEvents ReconciliationEvent[]
+  subscriptions        Subscription[]
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, localId])
+  @@index([userId, occurredAt])
+  @@index([userId, syncStatus, updatedAt])
+  @@index([providerId, type])
+  @@index([userId, providerId, reference])
+}
+
+model RawSmsLog {
+  id            String            @id @default(uuid()) @db.Uuid
+  userId        String            @db.Uuid
+  localId       String?
+  deviceId      String?           @db.Uuid
+  providerId    String?           @db.Uuid
+  transactionId String?           @unique @db.Uuid
+  senderId      String
+  messageBody   String?
+  receivedAt    DateTime
+  parseStatus   RawSmsParseStatus @default(UNPARSED)
+  createdAt     DateTime          @default(now())
+  device        Device?           @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  provider      Provider?         @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  transaction   Transaction?      @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, localId])
+  @@index([userId, receivedAt])
+  @@index([providerId, parseStatus])
+}
+
+model BalanceSnapshot {
+  id            String       @id @default(uuid()) @db.Uuid
+  userId        String?      @db.Uuid
+  accountId     String?      @db.Uuid
+  providerId    String?      @db.Uuid
+  transactionId String?      @db.Uuid
+  balance       Decimal      @db.Decimal(18, 2)
+  recordedAt    DateTime     @default(now())
+  account       Account?     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  provider      Provider?    @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  user          User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, recordedAt])
+  @@index([accountId, recordedAt])
+  @@index([providerId, recordedAt])
+}
+
+model BalanceDiscrepancy {
+  id              String                   @id @default(uuid()) @db.Uuid
+  userId          String                   @db.Uuid
+  accountId       String?                  @db.Uuid
+  providerId      String?                  @db.Uuid
+  transactionId   String?                  @db.Uuid
+  reportedBalance Decimal                  @db.Decimal(18, 2)
+  expectedBalance Decimal                  @db.Decimal(18, 2)
+  difference      Decimal                  @db.Decimal(18, 2)
+  status          BalanceDiscrepancyStatus @default(OPEN)
+  reason          String?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  account         Account?                 @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  provider        Provider?                @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  transaction     Transaction?             @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@index([providerId, status])
+  @@index([accountId, status])
+}
+
+model ReconciliationEvent {
+  id            String                      @id @default(uuid()) @db.Uuid
+  userId        String                      @db.Uuid
+  transactionId String?                     @db.Uuid
+  status        ReconciliationStatus
+  reason        String?
+  createdAt     DateTime                    @default(now())
+  details       ReconciliationEventDetail[]
+  transaction   Transaction?                @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  user          User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@index([transactionId])
+}
+
+model ReconciliationEventDetail {
+  id                    String              @id @default(uuid()) @db.Uuid
+  reconciliationEventId String              @db.Uuid
+  key                   String
+  value                 String
+  valueType             ConfigValueType     @default(STRING)
+  reconciliationEvent   ReconciliationEvent @relation(fields: [reconciliationEventId], references: [id], onDelete: Cascade)
+
+  @@unique([reconciliationEventId, key])
+}
+
+model Merchant {
+  id            String         @id @default(uuid()) @db.Uuid
+  displayName   String
+  providerCode  String?
+  merchantRef   String?
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  subscriptions Subscription[]
+
+  @@index([displayName])
+  @@index([providerCode, merchantRef])
+}
+
+model Subscription {
+  id                    String                @id @default(uuid()) @db.Uuid
+  userId                String                @db.Uuid
+  merchantId            String?               @db.Uuid
+  lastPaidTransactionId String?               @db.Uuid
+  name                  String
+  category              SubscriptionCategory  @default(OTHER)
+  frequency             SubscriptionFrequency @default(MONTHLY)
+  amount                Decimal?              @db.Decimal(18, 2)
+  currency              String                @default("ETB")
+  recurrenceRule        String?
+  nextDueAt             DateTime?
+  status                SubscriptionStatus    @default(ACTIVE)
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  lastPaidTransaction   Transaction?          @relation(fields: [lastPaidTransactionId], references: [id], onDelete: SetNull)
+  merchant              Merchant?             @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, nextDueAt])
+}
+
+model NotificationPreference {
+  id                     String   @id @default(uuid()) @db.Uuid
+  userId                 String   @unique @db.Uuid
+  newTransactionEnabled  Boolean  @default(true)
+  balanceMismatchEnabled Boolean  @default(true)
+  spendingLimitEnabled   Boolean  @default(true)
+  upcomingBillEnabled    Boolean  @default(true)
+  syncFailureEnabled     Boolean  @default(true)
+  paymentStatusEnabled   Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String           @id @default(uuid()) @db.Uuid
+  actorId    String?          @db.Uuid
+  action     String
+  targetType String
+  targetId   String?
+  createdAt  DateTime         @default(now())
+  actor      User?            @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  details    AuditLogDetail[]
+
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+}
+
+model AuditLogDetail {
+  id         String          @id @default(uuid()) @db.Uuid
+  auditLogId String          @db.Uuid
+  key        String
+  value      String
+  valueType  ConfigValueType @default(STRING)
+  auditLog   AuditLog        @relation(fields: [auditLogId], references: [id], onDelete: Cascade)
+
+  @@unique([auditLogId, key])
+}
